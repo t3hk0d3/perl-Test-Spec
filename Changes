@@ -1,5 +1,41 @@
 Revision history for Perl extension Test::Spec.
 
+0.54 Tue Nov 21 12:46:00 MSK 2017
+  - `around` method added to allow localized variables and other local setup.
+    Call `yield` method to run examples by `around` CODE.
+    Contributed by @akzhan
+
+  - Replace some `use base` with `use parent` and other minor updates.
+    Contributed by @akzhan
+
+  - Now tested under Perl 5.22-5.26 too
+    Contributed by @akzhan
+
+  - predictable_destroy spec fixed under Perl 5.8
+    Contributed by @akzhan
+
+0.53 Wed Aug 16 09:49:00 BST 2017
+  - POD links are clickable
+    Contributed by @manwar (issue #42)
+
+0.52 Tue Aug 15 10:20:00 BST 2017
+  - Pass example instance to each test
+    Contributed by @jamhed (issue #30, #41)
+  - Fix runtests to run all examples that match any of the patterns
+    Contributed by @mpw96 (issue #37, #38)
+  - Ensure META.json includes requirements
+    Reported by @joelrebel (issue #39)
+
+0.51 Mon Jul 27 20:05:00 BST 2015
+  - Fixed top level describe blocks running out of order
+    Contributed by @mla (issue #28)
+
+0.50 Sun Apr 19 18:13:00 BST 2015
+  - Removed several memory leaks
+    Reported by @JRaspass (issue #24)
+  - any_number() no longer fails if it is never called
+    Contributed by @ptolemarch and @cavemanpi (issue #25)
+
 0.49 Sun Jan 18 12:56:00 EST 2015
   - Added with_deep
     Contributed by Andy Jones (issue #21)

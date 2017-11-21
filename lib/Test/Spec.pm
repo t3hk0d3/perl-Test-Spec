@@ -3,9 +3,9 @@ use strict;
 use warnings;
 use Test::Trap ();        # load as early as possible to override CORE::exit
 
-our $VERSION = '0.49';
+our $VERSION = '0.54';
 
-use base qw(Exporter);
+use parent 'Exporter';
 
 use Carp ();
 use Exporter ();
@@ -19,18 +19,22 @@ our $Debug = $ENV{TEST_SPEC_DEBUG} || 0;
 
 our @EXPORT      = qw(runtests
                       describe xdescribe context xcontext it xit they xthey
-                      before after spec_helper
+                      before after around yield spec_helper
                       *TODO share shared_examples_for it_should_behave_like );
 our @EXPORT_OK   = ( @EXPORT, qw(DEFINITION_PHASE EXECUTION_PHASE $Debug) );
 our %EXPORT_TAGS = ( all => \@EXPORT_OK,
                      constants => [qw(DEFINITION_PHASE EXECUTION_PHASE)] );
+our @CARP_NOT    = ();
 
 our $_Current_Context;
-our $_Package_Contexts = _ixhash();
+our %_Package_Contexts;
 our %_Package_Phase;
 our %_Package_Tests;
-
-our $_Shared_Example_Groups = {};
+our %_Shared_Example_Groups;
+our $Yield = sub {
+  local @CARP_NOT = qw( Test::Spec );
+  Carp::croak "yield can be called only by around CODE";
+};
 
 # Avoid polluting the Spec namespace by loading these other modules into
 # what's essentially a mixin class.  When you write "use Test::Spec",
@@ -71,7 +75,7 @@ sub import {
 
   eval qq{
     package $callpkg;
-    use base 'Test::Spec';
+    use parent 'Test::Spec';
     # allow Test::Spec usage errors to be reported via Carp
     our \@CARP_NOT = qw($callpkg);
   };
@@ -128,10 +132,11 @@ sub runtests {
   $class->_materialize_tests;
   $class->phase(EXECUTION_PHASE);
 
-  my @which = @_         ? @_           : 
+  my @which = @_         ? @_           :
               $ENV{SPEC} ? ($ENV{SPEC}) : ();
 
-  return $class->_execute_tests( $class->_pick_tests(@which) );
+  my @tests = $class->_pick_tests(@which);
+  return $class->_execute_tests( @tests );
 }
 
 sub builder {
@@ -142,17 +147,24 @@ sub builder {
 sub _pick_tests {
   my ($class,@matchers) = @_;
   my @tests = $class->tests;
-  for my $pattern (@matchers) {
-    @tests = grep { $_ =~ /$pattern/i } @tests;
-  }
+
+  my $pattern = join("|", @matchers);
+  @tests = grep { $_->name =~ /$pattern/i } @tests;
+
   return @tests;
 }
 
 sub _execute_tests {
   my ($class,@tests) = @_;
   for my $test (@tests) {
-    $class->can($test)->();
+    $test->run();
   }
+
+  # Ensure we don't keep any references to user variables so they go out
+  # of scope in a predictable fashion.
+  %_Package_Tests = %_Package_Contexts = ();
+
+  # XXX: this doesn't play nicely with Test::NoWarnings and friends
   $class->builder->done_testing;
 }
 
@@ -197,7 +209,7 @@ sub describe(@) {
     $container = $_Current_Context->context_lookup;
   }
   else {
-    $container = $_Package_Contexts->{$package} ||= _ixhash();
+    $container = $_Package_Contexts{$package} ||= Test::Spec::_ixhash();
   }
 
   __PACKAGE__->_accumulate_examples({
@@ -207,6 +219,22 @@ sub describe(@) {
     code => $code,
     label => $name,
   });
+}
+
+# around CODE
+sub around(&) {
+  my $package = caller;
+  my $code = pop;
+  if (ref($code) ne 'CODE') {
+    Carp::croak "expected subroutine reference as last argument";
+  }
+  my $context = _autovivify_context($package);
+  push @{ $context->around_blocks }, { code => $code };
+}
+
+# yield
+sub yield() {
+  $Yield->();
 }
 
 # make context() an alias for describe()
@@ -245,7 +273,7 @@ sub shared_examples_for($&) {
   }
 
   __PACKAGE__->_accumulate_examples({
-    container => $_Shared_Example_Groups,
+    container => \%_Shared_Example_Groups,
     name => $name,
     class => undef,   # shared examples are global
     code => $code,
@@ -282,12 +310,9 @@ sub _accumulate_examples {
     }
   }
 
-  # push a context onto the stack
-  local $_Current_Context = $context;
-
   # evaluate the context function, which will set up lexical variables and
   # define tests and other contexts
-  $context->contextualize($code); 
+  $context->contextualize($code);
 }
 
 # it_should_behave_like DESC
@@ -299,7 +324,7 @@ sub it_should_behave_like($) {
   if (!$_Current_Context) {
     Carp::croak "it_should_behave_like can only be used inside a describe or shared_examples_for context";
   }
-  my $context = $_Shared_Example_Groups->{$name} ||
+  my $context = $_Shared_Example_Groups{$name} ||
     Carp::croak "unrecognized example group \"$name\"";
 
   # make a copy so we can assign the correct class name (via parent),
@@ -380,7 +405,7 @@ sub share(\%) {
 
 sub _materialize_tests {
   my $class = shift;
-  my $contexts = $_Package_Contexts->{$class};
+  my $contexts = $_Package_Contexts{$class};
   if (not $contexts && %$contexts) {
     Carp::carp "no examples defined in spec package $class";
     return;
@@ -414,7 +439,7 @@ sub _autovivify_context {
   }
   else {
     my $name = '';  # unnamed context
-    return $_Package_Contexts->{$package}{$name} ||= 
+    return $_Package_Contexts{$package}{$name} ||=
       Test::Spec::Context->new({ name => $name, class => $package, parent => undef });
   }
 }
@@ -426,7 +451,7 @@ sub current_context {
 
 sub contexts {
   my ($class) = @_;
-  my @ctx = values %{ $_Package_Contexts->{$class} || {} };
+  my @ctx = values %{ $_Package_Contexts{$class} || {} };
   return wantarray ? @ctx : \@ctx;
 }
 
@@ -502,9 +527,8 @@ development (BDD) in Perl. The tests (a.k.a. examples) are named with strings
 instead of subroutine names, so your fingers will suffer less fatigue from
 underscore-itis, with the side benefit that the test reports are more legible.
 
-This module is inspired by and borrows heavily from RSpec
-(http://rspec.info/documentation/), a BDD tool for the Ruby programming
-language.
+This module is inspired by and borrows heavily from L<RSpec|http://rspec.info/documentation>, 
+a BDD tool for the Ruby programming language.
 
 =head2 EXPORTS
 
@@ -728,6 +752,29 @@ respectively.  The default is "each".
 
 C<after "all"> blocks run I<after> C<after "each"> blocks.
 
+=item around CODE
+
+Defines code to be run around tests in the current describe block are
+run. This code must call C<yield>..
+
+  our $var = 0;
+
+  describe "Something" => sub {
+    around {
+      local $var = 1;
+      yield;
+    };
+
+    it "should have localized var" => sub {
+      is $var, 1;
+    };
+  }; 
+
+This CODE will run around each example.
+
+=item yield
+
+Runs examples in context of C<around> block.
 
 =item shared_examples_for DESCRIPTION => CODE
 
@@ -879,10 +926,10 @@ Consider the browsers example from C<shared_examples_for>. A real
 browser specification would be large, so putting the specs for all
 browsers in the same file would be a bad idea. So let's say we create
 C<all_browsers.pl> for the shared examples, and give Safari and Firefox
-C<safari.t> and C<firefox.t>, respectively. 
+C<safari.t> and C<firefox.t>, respectively.
 
 The problem then becomes: how does the code in C<all_browsers.pl> access
-the C<$browser> variable? In L<the example code|/shared_examples_for DESCRIPTION =E<gt> CODE>, 
+the C<$browser> variable? In L<the example code|/shared_examples_for DESCRIPTION =E<gt> CODE>,
 C<$browser> is a lexical variable that is in scope for all the examples.
 But once those examples are split into multiple files, you would have to
 use either package global variables or worse, come up with some other
@@ -967,7 +1014,7 @@ C<after>.
 
 =head1 SEE ALSO
 
-RSpec (http://rspec.info), L<Test::More>, L<Test::Deep>, L<Test::Trap>,
+L<RSpec|http://rspec.info>, L<Test::More>, L<Test::Deep>, L<Test::Trap>,
 L<Test::Builder>.
 
 The mocking and stubbing tools are in L<Test::Spec::Mocks>.
@@ -978,8 +1025,7 @@ Philip Garrett <philip.garrett@icainformatics.com>
 
 =head1 CONTRIBUTING
 
-The source code for Test::Spec lives on github:
-  https://github.com/kingpong/perl-Test-Spec
+The source code for Test::Spec lives on L<github|https://github.com/kingpong/perl-Test-Spec>
 
 If you want to contribute a patch, fork my repository, make your change,
 and send me a pull request.

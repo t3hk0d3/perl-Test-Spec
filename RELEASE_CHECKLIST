@@ -1,8 +1,9 @@
 * Bump version in lib/Test/Spec.pm
 * podchecker `find lib -name \*.pm`
 * Update Changes
+* install release deps: Test::CheckManifest CPAN::Meta
 * make manifest
-* make test
+* RELEASE_TESTING=1 make test
 * make disttest
 * make dist
 * send on PAUSE the .tar.gz produced here, not a Github URL
