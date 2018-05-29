@@ -126,14 +126,14 @@ sub _runner {
   #
   return $ctx->contextualize(sub {
     $ctx->_run_before_all_once;
-    $ctx->_run_before('each');
+    $ctx->_run_before('each', $self);
     if ( @remainder ) {
       $self->_runner(@remainder);
     }
     else {
       $ctx->_in_anonymous_context($self->code, $self);
     }
-    $ctx->_run_after('each');
+    $ctx->_run_after('each', $self);
     # "after 'all'" only happens during context destruction (DEMOLISH).
     # This is the only way I can think to make this work right
     # in the case that only specific test methods are run.
